@@ -6,11 +6,12 @@
 html {
 }
 body {
+    --margin: 8px;
     box-sizing: border-box;
-    height: 100vh;
+    height: calc(100vh - var(--margin) * 2);
     margin: 0;
     max-width: 800px;
-    margin: 8px auto;
+    margin: var(--margin) auto;
     display: flex;
     flex-direction: column;
     overflow: hidden;
