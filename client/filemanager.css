@@ -1,0 +1,80 @@
+.filemanager {
+    border: 1px solid black;
+    position: relative;
+    --spacing: 20px;
+    --grid-size: 200px;
+    --icon-size: 80px;
+    --size: 80px;
+    .hidden {
+        display: none;
+    }
+}
+.filemanager-status {
+    display: flex;
+    > span {
+        flex: 1;
+    }
+    > span::after {
+        content: "\A0";
+    }
+    > progress {
+        min-width: 100px;
+    }
+    > progress:not([value]) {
+        display: none;
+    }
+}
+.filemanager-breadcrumb {
+    position: absolute;
+    left: 4px;
+    top: 4px;
+}
+.filemanager-trash {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: var(--icon-size);
+    height: var(--icon-size);
+    background-repeat: no-repeat;
+    background-size: contain;
+    background-image: url("resources/trash.svg");
+}
+.filemanager-view {
+    position: relative;
+    overflow-y: scroll;
+
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    height: 100%;
+    box-sizing: border-box;
+    gap: var(--spacing);
+    padding: 2em;
+
+    &.dragover {
+        border:1px solid green;
+    }
+
+    > * {
+        width: var(--grid-size);
+        > .icon {
+            display: block;
+            margin: 0 auto;
+            width: var(--icon-size);
+            height: var(--icon-size);
+            background-repeat: no-repeat;
+            background-size: contain;
+            background-image: url("resources/file.svg");
+
+        }
+        > .name {
+            display: block;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+            text-align: center;
+        }
+        &[data-type="dir"] > .icon {
+            background-image:url("resources/folder.svg");
+        }
+    }
+}

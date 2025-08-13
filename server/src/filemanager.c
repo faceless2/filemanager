@@ -1,0 +1,519 @@
+#include <uriparser/Uri.h>
+#include <jansson.h>
+#include <unistd.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <dirent.h>
+
+#ifndef SIZE_MAX
+#define TRUE 1
+#define FALSE 0
+#endif
+
+#ifndef SIZE_MAX
+#define SIZE_MAX ((size_t)(-1))
+#endif
+
+#define INITBUF 500
+#define LOGPATH "/tmp/log"
+
+typedef struct strlist {
+    char *value;
+    struct strlist *next;
+} strlist_t;
+
+typedef struct context {
+    char *root;
+    UriQueryListA *query;
+} context_t;
+
+void logmsg(char *fmt, ...) {
+    char *buf = malloc(INITBUF);
+    va_list va;
+    va_start(va, fmt);
+    int len = vsnprintf(buf, INITBUF - 2, fmt, va);
+    va_end(va);
+    if (len >= INITBUF - 2) {
+        free(buf);
+        buf = malloc(len + 5);
+        va_start(va, fmt);
+        len = vsnprintf(buf, len + 5, fmt, va);
+        va_end(va);
+    }
+    buf[len++] = '\n';
+    buf[len++] = 0;
+    int fd = open(LOGPATH, O_CREAT|O_WRONLY|O_APPEND, 0666);
+    write(fd, buf, strlen(buf));
+    close(fd);
+}
+
+void send(context_t *ctx, int code, json_t *json) {
+    char *s = json ? json_dumps(json, 0) : NULL;
+    logmsg("tx %d %s", code, s);
+    printf("Status: %d\r\n", code);
+    if (s) {
+        printf("Content-Type: application/json\r\n");
+        printf("Content-Length: %lu\r\n", strlen(s));
+        fputs("\r\n", stdout);
+        fputs(s, stdout);
+        free(s);
+    } else {
+        fputs("\r\n", stdout);
+    }
+}
+
+void sendmsg(context_t *ctx, int code, char *fmt, ...) {
+    json_t *j = json_object();
+    json_object_set_new(j, "ok", json_boolean(code >= 200 && code < 300));
+    if (fmt) {
+        char *buf = malloc(INITBUF);
+        va_list va; 
+        va_start(va, fmt);
+        int len = vsnprintf(buf, INITBUF, fmt, va);
+        va_end(va);
+        if (len > INITBUF) {
+            free(buf);
+            buf = malloc(len + 2);
+            va_start(va, fmt);
+            vsnprintf(buf, len + 2, fmt, va);
+            va_end(va);
+        }
+        json_object_set_new(j, "msg", json_string(buf));
+    }
+    send(ctx, code, j);
+    json_decref(j);
+}
+
+void info(context_t *ctx) {
+    json_t *a = json_array();
+    struct stat sb;
+    int found = 0;
+    for (UriQueryListA *q=ctx->query;q;q=q->next) {
+        if (!strcmp(q->key, "path")) {
+            found = 1;
+            char *path = calloc(strlen(ctx->root) + strlen(q->value) + 2, 1);
+            if (strlen(q->value)) {
+                sprintf(path, "%s/%s", ctx->root, q->value[0] == '/' ? q->value+1 : q->value);
+            } else {
+                strcpy(path, ctx->root);
+            }
+            if (!strstr(path, "/.") && !stat(path, &sb)) {
+                DIR *dir;
+                json_t *j = NULL;
+                if (S_ISDIR(sb.st_mode) && (dir=opendir(path)) != NULL) {
+                    j = json_object();
+                    json_object_set_new(j, "path", json_string(q->value));
+                    json_object_set_new(j, "type", json_string("dir"));
+                    if (access(path, W_OK)) {
+                        json_object_set_new(j, "readonly", json_true());
+                    }
+                    json_object_set_new(j, "ctime", json_integer((json_int_t)sb.st_ctime));
+                    json_object_set_new(j, "mtime", json_integer((json_int_t)sb.st_mtime));
+                    json_t *c = json_array();
+                    json_object_set_new(j, "kids", c);
+                    struct dirent *dp;
+                    int path2len = 100;
+                    char *path2 = calloc(strlen(path) + path2len + 3, 1);
+                    while ((dp = readdir(dir))) {
+                        if (dp->d_name[0] != '.') {
+                            if (strlen(dp->d_name) > path2len) {
+                                free(path2);
+                                path2len = strlen(dp->d_name);
+                                path2 = calloc(strlen(path) + path2len + 3, 1);
+                            }
+                            sprintf(path2, "%s/%s", path, dp->d_name);
+                            if (!stat(path2, &sb) && !access(path2, S_ISDIR(sb.st_mode) ? R_OK|X_OK : R_OK)) {
+                                json_array_append_new(c, json_string(dp->d_name));
+                            }
+                        }
+                    }
+                    closedir(dir);
+                    free(path2);
+                } else if (S_ISREG(sb.st_mode) && !access(path, R_OK)) {
+                    j = json_object();
+                    json_object_set_new(j, "path", json_string(q->value));
+                    json_object_set_new(j, "type", json_string("file"));
+                    if (access(path, W_OK)) {
+                        json_object_set_new(j, "readonly", json_true());
+                    }
+                    json_object_set_new(j, "ctime", json_integer((json_int_t)sb.st_ctime));
+                    json_object_set_new(j, "ctime", json_integer((json_int_t)sb.st_mtime));
+                    json_object_set_new(j, "length", json_integer((json_int_t)sb.st_size));
+                }
+                if (j) {
+                    json_array_append_new(a, j);
+                }
+            }
+        }
+    }
+    if (!found) {
+        json_decref(a);
+        const char *c = "path=";
+        void *old = ctx->query;
+        uriDissectQueryMallocA(&ctx->query, NULL, c, c + strlen(c));
+        info(ctx);
+        uriFreeQueryListA(ctx->query);
+        ctx->query = old;
+    } else {
+        json_t *o = json_object();
+        json_object_set_new(o, "ok", json_true());
+        json_object_set_new(o, "paths", a);
+        send(ctx, 200, o);
+        json_decref(o);
+    }
+}
+
+void get(context_t *ctx) {
+    struct stat sb;
+    for (UriQueryListA *q=ctx->query;q;q=q->next) {
+        if (!strcmp(q->key, "path")) {
+            const char *name = q->value;
+            if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
+                sendmsg(ctx, 400, "invalid path \"%s\"", name);
+                return;
+            } else {
+                char *path = calloc(strlen(ctx->root) + strlen(name) + 2, 1);
+                sprintf(path, "%s/%s", ctx->root, name);
+                if (stat(path, &sb)) {
+                    sendmsg(ctx, 404, "stat: %s", strerror(errno));
+                } else {
+                    int fd = open(path, O_RDONLY);
+                    if (fd < 0) {
+                        sendmsg(ctx, 404, "open: %s", strerror(errno));
+                    } else {
+                        printf("Content-Type: application/octet-stream\r\n");
+                        printf("Content-Length: %lu\r\n", sb.st_size);
+                        fputs("\r\n", stdout);
+                        char buf[32768];
+                        int l;
+                        while ((l=read(fd, buf, sizeof(buf))) > 0) {
+                            write(STDOUT_FILENO, buf, l);
+                        }
+                        close(fd);
+                    }
+                    return;
+                }
+                free(path);
+            }
+        }
+    }
+    sendmsg(ctx, 400, "missing path");
+}
+
+void put(context_t *ctx) {
+    size_t off = SIZE_MAX;
+    char *path = NULL;
+    struct stat sb;
+    memset(&sb, 0, sizeof(sb));
+    char buf[65536];
+
+    for (UriQueryListA *q=ctx->query;q;q=q->next) {
+        if (!strcmp(q->key, "path") && !path) {
+            const char *name = q->value;
+            if (*name == '/') {
+                name++;
+            }
+            if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
+                sendmsg(ctx, 400, "invalid path \"%s\"", name);
+                return;
+            } else {
+                path = calloc(strlen(ctx->root) + strlen(name) + 2, 1);
+                sprintf(path, "%s/%s", ctx->root, name);
+            }
+        } else if (!strcmp(q->key, "off") && *(q->value) && off == SIZE_MAX) {
+            char *c;
+            off = strtoul(q->value, &c, 10);
+            if (*c) {
+                sendmsg(ctx, 400, "invalid off \"%s\"", q->value);
+                return;
+            }
+        }
+    }
+    int fd = 0;
+    if (!path) {
+        sendmsg(ctx, 400, "missing path");
+    } else if ((access(path, F_OK) || !access(path, W_OK)) && (off == SIZE_MAX || off == 0)) {
+        fd = O_CREAT|O_WRONLY|O_TRUNC;
+    } else if (access(path, W_OK)) {
+        sendmsg(ctx, 403, "not writable: %s", strerror(errno));
+    } else if (stat(path, &sb)) {
+        sendmsg(ctx, 500, "stat: %s", strerror(errno));
+    } else if (!S_ISREG(sb.st_mode)) {
+        sendmsg(ctx, 403, "not a file");
+    } else if (off != sb.st_size) {
+        sendmsg(ctx, 400, "offset %lu should be %lu", off, sb.st_size);
+    } else {
+        fd = O_APPEND|O_WRONLY;
+    }
+    if (fd) {
+        for (char *c=path;*c;c++) {
+            if (*c == '/' && c != path) {
+                *c = 0;
+                mkdir(path, 0777);
+                *c = '/';
+            }
+        }
+        fd = open(path, fd, 0666);
+        if (fd < 0) {
+            sendmsg(ctx, 403, "open: %s", strerror(errno));
+        } else {
+            int l;
+            size_t count = 0;
+            while ((l=read(STDIN_FILENO, buf, sizeof(buf))) > 0) {
+                write(fd, buf, l);
+                count += l;
+            }
+            close(fd);
+            sendmsg(ctx, 200, "wrote %d bytes", count);
+        }
+    }
+}
+
+void domkdir(context_t *ctx) {
+    for (UriQueryListA *q=ctx->query;q;q=q->next) {
+        if (!strcmp(q->key, "path") && q->value) {
+            const char *name = q->value;
+            if (name[0] == '/') {
+                name++;
+            }
+            if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
+                sendmsg(ctx, 400, "invalid path \"%s\"", name);
+            } else {
+                char *path = calloc(strlen(ctx->root) + strlen(name) + 2, 1);
+                sprintf(path, "%s/%s", ctx->root, name);
+                if (!strstr(path, "/.")) {
+                    sendmsg(ctx, 400, "invalid path");
+                } else if (!access(path, F_OK)) {
+                    sendmsg(ctx, 403, "path exists");
+                } else if (mkdir(path, 0777)) {
+                    sendmsg(ctx, 403, "mkdir: %s", strerror(errno));
+                } else {
+                    sendmsg(ctx, 200, "mkdir \"%s\"", name);
+                }
+                return;
+            }
+        }
+    }
+    sendmsg(ctx, 400, "missing path");
+}
+
+
+static strlist_t *free_strlist(strlist_t *n) {
+    if (n) {
+        strlist_t *start = n;
+        do {
+            free(n->value);
+            strlist_t *next = n->next;
+            free(n);
+            n = next;
+        } while (n && n != start);
+    }
+    return NULL;
+}
+
+/**
+ * Traverse everything under "path" and add to end of list,
+ * allocating if necessary. Files ending in "/" are directories.
+ * If anything can't be traversed, send an error message and return null
+ * returned list is a loop
+ */
+void traverse(context_t *ctx, const char *path, strlist_t **start, strlist_t **end) {
+    struct stat sb;
+    char *buf = calloc(strlen(ctx->root) + strlen(path) + 3, 1);
+    if (*path == 0) {
+        sprintf(buf, "%s", ctx->root);
+    } else {
+        sprintf(buf, "%s/%s", ctx->root, path);
+    }
+    if (stat(buf, &sb)) {
+        sendmsg(ctx, 500, "stat \"%s\": %s", path, strerror(errno));
+        *start = *end = free_strlist(*start);
+    } else {
+        if (S_ISDIR(sb.st_mode)) {
+            DIR *dir = opendir(buf);
+            if (!dir) {
+                sendmsg(ctx, 500, "opendir \"%s\": %s", path, strerror(errno));
+                *start = *end = free_strlist(*start);
+            } else {
+                struct dirent *dp;
+                while ((dp = readdir(dir))) {
+                    if (strcmp(dp->d_name, ".") && strcmp(dp->d_name, "..")) {
+                        char *buf2 = calloc(strlen(path) + strlen(dp->d_name) + 2, 1);
+                        sprintf(buf2, "%s/%s", path, dp->d_name);
+                        traverse(ctx, buf2, start, end);
+                        free(buf2);
+                        if (!*end) {
+                            return;
+                        }
+                    }
+                }
+            }
+            buf[strlen(buf)] = '/';
+        }
+        strlist_t *next = calloc(sizeof(strlist_t), 1);
+        next->value = buf;
+        if (!*end) {
+            *start = *end = next;
+        } else {
+            (*end)->next = next;
+            *end = next;
+        }
+    }
+}
+
+void delete(context_t *ctx) {
+    strlist_t *names = NULL, *names_end = NULL;
+
+    for (UriQueryListA *q=ctx->query;q;q=q->next) {
+        if (!strcmp(q->key, "path") && q->value) {
+            const char *name = q->value;
+            if (name[0] == '/') {
+                name++;
+            }
+            if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
+                sendmsg(ctx, 400, "invalid path \"%s\"", name);
+            } else {
+                traverse(ctx, name, &names, &names_end);
+            }
+        }
+    }
+    for (strlist_t *n=names;n;n=n->next) {
+        char *path = n->value;
+        char *relpath = path + strlen(ctx->root) + 1;
+        if (path[strlen(path) - 1] == '/') {    // directory
+            path[strlen(path) - 1] = 0;
+            if (access(path, R_OK|X_OK|W_OK)) {
+                sendmsg(ctx, 403, "not writable \"%s\"", relpath);
+                names = free_strlist(names);
+                break;
+            }
+            path[strlen(path)] = '/';
+        } else if (strstr(relpath, "/.")) {     // directory contains .file
+            *(rindex(relpath, '/')) = 0;
+            sendmsg(ctx, 400, "directory not empty \"%s\"", relpath);
+            names = free_strlist(names);
+            break;
+        } else if (access(path, R_OK|W_OK)) {
+            sendmsg(ctx, 400, "not writable \"%s\" \"%s\"", relpath, path);
+            names = free_strlist(names);
+            break;
+        }
+    }
+    if (names) {
+        json_t *a = json_array();
+        for (strlist_t *n=names;n;n=n->next) {
+            char *path = n->value;
+            char *relpath = path + strlen(ctx->root) + 1;
+            if (path[strlen(path) - 1] == '/') {    // directory
+                if (rmdir(path)) {
+                    sendmsg(ctx, 500, "rmdir \"%s\": %s", relpath, strerror(errno));
+                    names = free_strlist(names);
+                    json_decref(a);
+                    break;
+                } else {
+                    json_array_append_new(a, json_string(relpath));
+                }
+            } else {
+                if (unlink(path)) {
+                    sendmsg(ctx, 500, "unlink \"%s\": %s", relpath, strerror(errno));
+                    names = free_strlist(names);
+                    json_decref(a);
+                    break;
+                } else {
+                    json_array_append_new(a, json_string(relpath));
+                }
+            }
+        }
+        if (names) {
+            json_t *o = json_object();
+            json_object_set_new(o, "ok", json_true());
+            json_object_set_new(o, "paths", a);
+            send(ctx, 200, o);
+            names = free_strlist(names);
+            json_decref(o);
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    context_t *ctx = calloc(sizeof(context_t), 1);
+    ctx->root = getenv("ROOT");
+    char *method = getenv("REQUEST_METHOD");
+    char *path = getenv("PATH_INFO");
+    char *querystring = getenv("QUERY_STRING");
+    struct stat sb;
+//    fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL) | O_NONBLOCK);
+
+    for (int i=1;i<argc;i++) {
+        if (!strcmp(argv[i], "--root") && i + 1 < argc) {
+            ctx->root = argv[++i];
+        } else if (!strcmp(argv[i], "--method") && i + 1 < argc) {
+            method = argv[++i];
+        } else if (!strcmp(argv[i], "--path") && i + 1 < argc) {
+            path = argv[++i];
+        } else if (!strcmp(argv[i], "--query") && i + 1 < argc) {
+            querystring = argv[++i];
+        } else {
+            sendmsg(ctx, 500, "unknown argument \"%s\"", argv[i]);
+            return 0;
+        }
+    }
+    if (!ctx->root) {
+        sendmsg(ctx, 500, "root directory not specified");
+        return 0;
+    } else if (!method) {
+        sendmsg(ctx, 500, "method not specified");
+        return 0;
+    } else if (!path) {
+        sendmsg(ctx, 500, "path not specified");
+        return 0;
+    } else {
+        logmsg("rx: path=%s query=%s", path, querystring);
+    }
+    if (querystring) {
+        int count;
+        if (uriDissectQueryMallocA(&ctx->query, &count, querystring, querystring + strlen(querystring)) != URI_SUCCESS) {
+            uriFreeQueryListA(ctx->query);
+            ctx->query = NULL;
+        }
+    }
+    if (ctx->root[strlen(ctx->root) - 1] == '/') {
+        ctx->root[strlen(ctx->root) - 1] = 0;
+    }
+    if (!chroot(ctx->root)) {
+        ctx->root = "";     // chroot if we can
+    }
+    if (stat(ctx->root, &sb)) {
+        sendmsg(ctx, 500, "stat: \"%s\"", strerror(errno));
+        return 0;
+    } else if (!S_ISDIR(sb.st_mode)) {
+        sendmsg(ctx, 500, "root directory \"%s\" is not a directory", ctx->root);
+        return 0;
+    }
+
+    if (strcmp("GET", method) && strcmp("POST", method)) {
+        sendmsg(ctx, 405, "method \"%s\" invalid for \"%s\"", method, path + 1);
+        return 0;
+    } else if (!strcmp("/info", path)) {
+        info(ctx);
+    } else if (!strcmp("/get", path)) {
+        get(ctx);
+    } else if (!strcmp("/mkdir", path) && !strcmp("POST", method)) {
+        domkdir(ctx);
+    } else if (!strcmp("/delete", path)) {
+        delete(ctx);
+    } else if (!strcmp("/put", path) && !strcmp("POST", method)) {
+        if (!strcmp("POST", method)) {
+            put(ctx);
+        } else {
+            sendmsg(ctx, 405, "method \"%s\" invalid for \"%s\"", method, path + 1);
+        return 0;
+        }
+    } else {
+        sendmsg(ctx, 404, "invalid script path \"%s\"", path);
+    }
+}

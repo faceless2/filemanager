@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" href="filemanager.css" />
+<style>
+html {
+}
+body {
+    box-sizing: border-box;
+    height: 100vh;
+    margin: 0;
+    max-width: 800px;
+    margin: 8px auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#filemanager {
+    font: 16px sans-serif;
+    border: 1px solid black;
+    flex: 1;
+}
+</style>
+<script src="filemanager.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    new FileManager(document.getElementById("filemanager"), "/cgi-bin/filemanager", {
+        comparator: (a,b) => {
+            let pa = a.getAttribute("data-path");
+            let pb = b.getAttribute("data-path");
+            let v =  pa.toLowerCase() > pb.toLowerCase() ? 1 : pa.toLowerCase() < pb.toLowerCase() ? -1 : 0;
+            return v;
+        }
+    });
+});
+</script>
+</head>
+<body>
+<h1>File Manager demo</h1>
+<div id="filemanager"></div>
+</body>
+</html>
