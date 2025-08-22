@@ -1,4 +1,4 @@
-# File Manager
+# Simple HTML File Manager
 
 An intentionally trivial HTML interface for uploading and downloading files to/from a webserver
 
