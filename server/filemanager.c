@@ -54,7 +54,7 @@ void logmsg(context_t *ctx, char *fmt, ...) {
         } else {
             buf[len++] = '\n';
             buf[len++] = 0;
-            int fd = open(LOG, O_CREAT|O_WRONLY|O_APPEND, 0666);
+            int fd = open(ctx->log, O_CREAT|O_WRONLY|O_APPEND, 0666);
             write(fd, buf, strlen(buf));
             close(fd);
         }
@@ -75,7 +75,7 @@ void help(context_t *ctx) {
         printf("  Default root directory: unspecified\n");
     }
     if (ctx->log) {
-        printf("  Default logfile: \"%s\"\n", ctx->root);
+        printf("  Default logfile: \"%s\"\n", ctx->log);
     } else {
         printf("  Default logfile: unspecified\n");
     }
