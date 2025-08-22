@@ -1,4 +1,4 @@
-ROOT=foo
+#ROOT=/tmp/uploaddir		# optional compiled-in root directory
 
 TARGET = filemanager
 LIBS = -lm -ljansson
