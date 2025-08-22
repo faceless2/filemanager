@@ -8,9 +8,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <syslog.h>
 
 #ifndef ROOT
 #define ROOT ""
+#endif
+#ifndef LOG
+#define LOG ""
 #endif
 
 #ifndef SIZE_MAX
@@ -18,7 +22,6 @@
 #endif
 
 #define INITBUF 500
-#define LOGPATH "/tmp/log"
 
 typedef struct strlist {
     char *value;
@@ -27,39 +30,54 @@ typedef struct strlist {
 
 typedef struct context {
     char *root;
+    char *log;
     char **query;
 } context_t;
 
-void logmsg(char *fmt, ...) {
-    char *buf = malloc(INITBUF);
-    va_list va;
-    va_start(va, fmt);
-    int len = vsnprintf(buf, INITBUF - 2, fmt, va);
-    va_end(va);
-    if (len >= INITBUF - 2) {
-        free(buf);
-        buf = malloc(len + 5);
+void logmsg(context_t *ctx, char *fmt, ...) {
+    if (ctx->log) {
+        char *buf = malloc(INITBUF);
+        va_list va;
         va_start(va, fmt);
-        len = vsnprintf(buf, len + 5, fmt, va);
+        int len = vsnprintf(buf, INITBUF - 2, fmt, va);
         va_end(va);
+        if (len >= INITBUF - 2) {
+            free(buf);
+            buf = malloc(len + 5);
+            va_start(va, fmt);
+            len = vsnprintf(buf, len + 5, fmt, va);
+            va_end(va);
+        }
+        if (!strcmp(ctx->log, "syslog")) {
+            buf[len++] = 0;
+            syslog(LOG_USER|LOG_INFO, "%s", buf);
+        } else {
+            buf[len++] = '\n';
+            buf[len++] = 0;
+            int fd = open(LOG, O_CREAT|O_WRONLY|O_APPEND, 0666);
+            write(fd, buf, strlen(buf));
+            close(fd);
+        }
     }
-    buf[len++] = '\n';
-    buf[len++] = 0;
-    int fd = open(LOGPATH, O_CREAT|O_WRONLY|O_APPEND, 0666);
-    write(fd, buf, strlen(buf));
-    close(fd);
 }
 
 void help(context_t *ctx) {
     printf("\nUsage: \"filemanager\" runs as a cgi-script.\n");
     printf("No REQUEST_METHOD environment variable detected, so this is not a CGI environment\n\n");
     printf("  --root <dir>           specify the root directory for files. Must be writable\n");
+    printf("  --log <file|\"syslog\">  specify file to write log messages to, or syslog. optional\n");
     printf("  --path <dir>           (for non-CGI debugging) specify the PATH_INFO variable\n");
     printf("  --query <dir>          (for non-CGI debugging) specify the QUERY_STRING variable\n");
+    printf("Also override root directory and log-file with ROOT and LOG environments variable\n");
     if (ctx->root) {
-        printf("  Default ROOT directory: \"%s\"\n", ctx->root);
+        printf("  Default root directory: \"%s\"\n", ctx->root);
     } else {
-        printf("  Default ROOT directory: unspecified\n");
+        printf("  Default root directory: unspecified\n");
+    }
+    if (ctx->log) {
+        printf("  Default logfile: \"%s\"\n", ctx->root);
+    } else {
+        printf("  Default logfile: unspecified\n");
     }
     printf("\n");
     exit(0);
@@ -72,7 +90,7 @@ void help(context_t *ctx) {
 char **parse_querystring(char *s) {
     char **out;
     int count = 0;
-    if (*s) {
+    if (s && *s) {
         count = 1;
         for (char *c=s;*c;c++) {
             if (*c == '&') {
@@ -142,7 +160,7 @@ char **parse_querystring(char *s) {
 
 void send(context_t *ctx, int code, json_t *json) {
     char *s = json ? json_dumps(json, 0) : NULL;
-    logmsg("tx %d %s", code, s);
+    logmsg(ctx, "tx %d %s", code, s);
     printf("Status: %d\r\n", code);
     if (s) {
         printf("Content-Type: application/json\r\n");
@@ -267,6 +285,9 @@ void get(context_t *ctx) {
         char *qval = *q++;
         if (!strcmp(qkey, "path")) {
             const char *name = qval;
+            if (*name == '/') {
+                name++;
+            }
             if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
                 sendmsg(ctx, 400, "invalid path \"%s\"", name);
                 return;
@@ -274,11 +295,15 @@ void get(context_t *ctx) {
                 char *path = calloc(strlen(ctx->root) + strlen(name) + 2, 1);
                 sprintf(path, "%s/%s", ctx->root, name);
                 if (stat(path, &sb)) {
-                    sendmsg(ctx, 404, "stat: %s", strerror(errno));
+                    logmsg(ctx, "get stat \"%s\": %s", path, strerror(errno));
+                    sendmsg(ctx, 404, "get stat \"%s\": %s", name, strerror(errno));
+                    return;
                 } else {
                     int fd = open(path, O_RDONLY);
                     if (fd < 0) {
-                        sendmsg(ctx, 404, "open: %s", strerror(errno));
+                        logmsg(ctx, "get open \"%s\": %s", path, strerror(errno));
+                        sendmsg(ctx, 404, "get open: %s", strerror(errno));
+                        return;
                     } else {
                         printf("Content-Type: application/octet-stream\r\n");
                         printf("Content-Length: %lu\r\n", sb.st_size);
@@ -336,9 +361,11 @@ void put(context_t *ctx) {
     } else if ((access(path, F_OK) || !access(path, W_OK)) && (off == SIZE_MAX || off == 0)) {
         fd = O_CREAT|O_WRONLY|O_TRUNC;
     } else if (access(path, W_OK)) {
+        logmsg(ctx, "put access \"%s\": not writable", path);
         sendmsg(ctx, 403, "not writable: %s", strerror(errno));
     } else if (stat(path, &sb)) {
-        sendmsg(ctx, 500, "stat: %s", strerror(errno));
+        logmsg(ctx, "put stat \"%s\": %s", path, strerror(errno));
+        sendmsg(ctx, 500, "put stat: %s", strerror(errno));
     } else if (!S_ISREG(sb.st_mode)) {
         sendmsg(ctx, 403, "not a file");
     } else if (off != sb.st_size) {
@@ -356,7 +383,7 @@ void put(context_t *ctx) {
         }
         fd = open(path, fd, 0666);
         if (fd < 0) {
-            sendmsg(ctx, 403, "open: %s", strerror(errno));
+            sendmsg(ctx, 403, "put open: %s", strerror(errno));
         } else {
             int l;
             size_t count = 0;
@@ -381,14 +408,17 @@ void domkdir(context_t *ctx) {
             }
             if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
                 sendmsg(ctx, 400, "invalid path \"%s\"", name);
+                return;
             } else {
                 char *path = calloc(strlen(ctx->root) + strlen(name) + 2, 1);
                 sprintf(path, "%s/%s", ctx->root, name);
                 if (!strstr(path, "/.")) {
                     sendmsg(ctx, 400, "invalid path");
                 } else if (!access(path, F_OK)) {
-                    sendmsg(ctx, 403, "path exists");
+                    logmsg(ctx, "mkdir \"%s\": path exists", path);
+                    sendmsg(ctx, 403, "mkdir: path exists");
                 } else if (mkdir(path, 0777)) {
+                    logmsg(ctx, "mkdir \"%s\": %s", path, strerror(errno));
                     sendmsg(ctx, 403, "mkdir: %s", strerror(errno));
                 } else {
                     sendmsg(ctx, 200, "mkdir \"%s\"", name);
@@ -429,12 +459,14 @@ void traverse(context_t *ctx, const char *path, strlist_t **start, strlist_t **e
         sprintf(buf, "%s/%s", ctx->root, path);
     }
     if (stat(buf, &sb)) {
-        sendmsg(ctx, 500, "stat \"%s\": %s", path, strerror(errno));
+        logmsg(ctx, "traverse stat \"%s\": %s", path, strerror(errno));
+        sendmsg(ctx, 500, "traverse stat \"%s\": %s", path, strerror(errno));
         *start = *end = free_strlist(*start);
     } else {
         if (S_ISDIR(sb.st_mode)) {
             DIR *dir = opendir(buf);
             if (!dir) {
+                logmsg(ctx, "opendir \"%s\": %s", path, strerror(errno));
                 sendmsg(ctx, 500, "opendir \"%s\": %s", path, strerror(errno));
                 *start = *end = free_strlist(*start);
             } else {
@@ -477,6 +509,7 @@ void delete(context_t *ctx) {
             }
             if (name[0] == 0 || name[0] == '.' || strstr(name, "/.")) {
                 sendmsg(ctx, 400, "invalid path \"%s\"", name);
+                return;
             } else {
                 traverse(ctx, name, &names, &names_end);
             }
@@ -488,7 +521,8 @@ void delete(context_t *ctx) {
         if (path[strlen(path) - 1] == '/') {    // directory
             path[strlen(path) - 1] = 0;
             if (access(path, R_OK|X_OK|W_OK)) {
-                sendmsg(ctx, 403, "not writable \"%s\"", relpath);
+                logmsg(ctx, "delete access dir \"%s\": not writable", path);
+                sendmsg(ctx, 403, "delete not writable \"%s\"", relpath);
                 names = free_strlist(names);
                 break;
             }
@@ -499,7 +533,8 @@ void delete(context_t *ctx) {
             names = free_strlist(names);
             break;
         } else if (access(path, R_OK|W_OK)) {
-            sendmsg(ctx, 400, "not writable \"%s\" \"%s\"", relpath, path);
+            logmsg(ctx, "delete access file \"%s\": not writable", path);
+            sendmsg(ctx, 400, "delete not writable \"%s\"", relpath);
             names = free_strlist(names);
             break;
         }
@@ -511,6 +546,7 @@ void delete(context_t *ctx) {
             char *relpath = path + strlen(ctx->root) + 1;
             if (path[strlen(path) - 1] == '/') {    // directory
                 if (rmdir(path)) {
+                    logmsg(ctx, "rmdir \"%s\": %s", path, strerror(errno));
                     sendmsg(ctx, 500, "rmdir \"%s\": %s", relpath, strerror(errno));
                     names = free_strlist(names);
                     json_decref(a);
@@ -520,6 +556,7 @@ void delete(context_t *ctx) {
                 }
             } else {
                 if (unlink(path)) {
+                    logmsg(ctx, "unlink \"%s\": %s", path, strerror(errno));
                     sendmsg(ctx, 500, "unlink \"%s\": %s", relpath, strerror(errno));
                     names = free_strlist(names);
                     json_decref(a);
@@ -543,11 +580,18 @@ void delete(context_t *ctx) {
 int main(int argc, char **argv) {
     context_t *ctx = calloc(sizeof(context_t), 1);
     ctx->root = ROOT;
+    ctx->log = LOG;
     if (ctx->root && !*ctx->root) {
         ctx->root = NULL;
     }
+    if (ctx->log && !*ctx->log) {
+        ctx->log = NULL;
+    }
     if (getenv("ROOT")) {
         ctx->root = getenv("ROOT");
+    }
+    if (getenv("LOG")) {
+        ctx->log = getenv("LOG");
     }
     char *method = getenv("REQUEST_METHOD");
     char *path = getenv("PATH_INFO");
@@ -558,6 +602,8 @@ int main(int argc, char **argv) {
     for (int i=1;i<argc;i++) {
         if (!strcmp(argv[i], "--root") && i + 1 < argc) {
             ctx->root = argv[++i];
+        } else if (!strcmp(argv[i], "--log") && i + 1 < argc) {
+            ctx->log = argv[++i];
         } else if (!strcmp(argv[i], "--method") && i + 1 < argc) {
             method = argv[++i];
         } else if (!strcmp(argv[i], "--path") && i + 1 < argc) {
@@ -574,16 +620,13 @@ int main(int argc, char **argv) {
     } else if (!ctx->root) {
         sendmsg(ctx, 500, "root directory not specified");
         return 0;
-        return 0;
     } else if (!path) {
         sendmsg(ctx, 500, "path not specified");
         return 0;
     } else {
-        logmsg("rx: path=%s query=%s", path, querystring);
+        logmsg(ctx, "rx: path=%s query=%s", path, querystring);
     }
-    if (querystring) {
-        ctx->query = parse_querystring(querystring);
-    }
+    ctx->query = parse_querystring(querystring);
     if (ctx->root[strlen(ctx->root) - 1] == '/') {
         ctx->root[strlen(ctx->root) - 1] = 0;
     }
@@ -591,7 +634,8 @@ int main(int argc, char **argv) {
         ctx->root = "";     // chroot if we can
     }
     if (stat(ctx->root, &sb)) {
-        sendmsg(ctx, 500, "stat: \"%s\"", strerror(errno));
+        logmsg(ctx, "init stat \"%s\": %s", path, strerror(errno));
+        sendmsg(ctx, 500, "root stat: \"%s\"", strerror(errno));
         return 0;
     } else if (!S_ISDIR(sb.st_mode)) {
         sendmsg(ctx, 500, "root directory \"%s\" is not a directory", ctx->root);
