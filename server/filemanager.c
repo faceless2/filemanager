@@ -308,6 +308,7 @@ void get(context_t *ctx) {
                         printf("Content-Type: application/octet-stream\r\n");
                         printf("Content-Length: %lu\r\n", sb.st_size);
                         fputs("\r\n", stdout);
+                        fflush(stdout);
                         char buf[32768];
                         int l;
                         while ((l=read(fd, buf, sizeof(buf))) > 0) {
@@ -579,8 +580,8 @@ void delete(context_t *ctx) {
 
 int main(int argc, char **argv) {
     context_t *ctx = calloc(sizeof(context_t), 1);
-    ctx->root = ROOT "\0";
-    ctx->log = LOG "\0";
+    ctx->root = ROOT;
+    ctx->log = LOG;
     if (ctx->root && !*ctx->root) {
         ctx->root = NULL;
     }
