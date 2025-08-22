@@ -1,4 +1,6 @@
 #ROOT=/tmp/uploaddir		# optional compiled-in root directory
+#LOG=/tmp/logfile		# optional logfile...
+#LOG=syslog			# optional log using syslog
 
 TARGET = filemanager
 LIBS = -lm -ljansson
@@ -15,7 +17,7 @@ OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c))
 HEADERS = $(wildcard *.h)
 
 %.o: %.c $(HEADERS)
-	$(CC) $(CFLAGS) -DROOT='"$(ROOT)"' -c $< -o $@
+	$(CC) $(CFLAGS) -DROOT='"$(ROOT)"' -DLOG='"$(LOG)"' -c $< -o $@
 
 .PRECIOUS: $(TARGET) $(OBJECTS)
 
