@@ -68,14 +68,14 @@ GET /filemanager.cgi/get?path=/file1.pdf
 HTTP/1.0 200 OK
 Content-type: application/octet-stream
 Content-length: nnn
-
-...
+... downloaded bytes
 ```
 
 The `put` command uploads a chunk of a file. If the offset is 0 or missing, the file is created along with any required parent directories. Otherwise the offset must match the current length of the file:
 ```
 POST /filemanager.cgi/put?path=/subdirectory/file2.pdf&off=0
 Content-Length: 32768
+... uploaded bytes
 
 HTTP/1.0 200 OK
 Content-type: application/json
@@ -83,6 +83,7 @@ Content-type: application/json
 
 POST /filemanager.cgi/put?path=/subdirectory/file2.pdf&off=32768
 Content-Length: 10000
+... uploaded bytes
 
 HTTP/1.0 200 OK
 Content-type: application/json
@@ -91,8 +92,7 @@ Content-type: application/json
 ... etc until the file is complete
 ```
 
-The `delete` path recursively removes the path, whether it is a file or directory. All files/directories must be writable and permissions for all of them are checked recursiively before any deletions start. A list of all the deleted paths are returned in the reply.
-
+The `delete` command recursively removes the path, whether it is a file or directory. All files/directories and their descendents must be writable and that must be verified before any deletions start. A list of all the deleted paths are returned in the reply.
 
 ```
 GET /filemanager.cgi/delete?path=/subdirectory
