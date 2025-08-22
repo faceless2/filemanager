@@ -1,7 +1,10 @@
+ROOT=foo
+
 TARGET = filemanager
-LIBS = -lm -luriparser -ljansson
+LIBS = -lm -ljansson
 CC = gcc
 CFLAGS = -g -Wall
+LDFLAGS = -static
 
 .PHONY: default all clean
 
@@ -12,12 +15,12 @@ OBJECTS = $(patsubst %.c, %.o, $(wildcard *.c))
 HEADERS = $(wildcard *.h)
 
 %.o: %.c $(HEADERS)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -DROOT='"$(ROOT)"' -c $< -o $@
 
 .PRECIOUS: $(TARGET) $(OBJECTS)
 
 $(TARGET): $(OBJECTS)
-	$(CC) $(OBJECTS) -Wall $(LIBS) -o $@
+	$(CC) $(OBJECTS) $(LDFLAGS) $(LIBS) -o $@
 
 clean:
 	-rm -f *.o
