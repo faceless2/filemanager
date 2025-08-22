@@ -579,8 +579,8 @@ void delete(context_t *ctx) {
 
 int main(int argc, char **argv) {
     context_t *ctx = calloc(sizeof(context_t), 1);
-    ctx->root = ROOT;
-    ctx->log = LOG;
+    ctx->root = ROOT "\0";
+    ctx->log = LOG "\0";
     if (ctx->root && !*ctx->root) {
         ctx->root = NULL;
     }
