@@ -146,7 +146,7 @@ void send(context_t *ctx, int code, json_t *json) {
     printf("Status: %d\r\n", code);
     if (s) {
         printf("Content-Type: application/json\r\n");
-        printf("Content-Length: %lu\r\n", strlen(s));
+        printf("Content-Length: %lu\r\n", (long unsigned int)strlen(s));
         fputs("\r\n", stdout);
         fputs(s, stdout);
         free(s);
