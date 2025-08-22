@@ -1,21 +1,29 @@
 .filemanager {
-    border: 1px solid black;
-    position: relative;
+    resize: true;
     --spacing: 20px;
     --grid-size: 200px;
     --icon-size: 80px;
     --size: 80px;
+    --dragover: #EFE;
+    border: 1px solid black;
+    position: relative;
+    min-height: calc(var(--grid-size) - var(--spacing));
     .hidden {
         display: none;
     }
 }
 .filemanager-status {
+    position: absolute;
+    box-sizing: border-box;
+    left: 0;
+    width: 100%;
+    bottom: 0;
     display: flex;
+    min-height: 1em;
+    padding: 2px 1em;
+    background: #eee;
     > span {
         flex: 1;
-    }
-    > span::after {
-        content: "\A0";
     }
     > progress {
         min-width: 100px;
@@ -24,35 +32,32 @@
         display: none;
     }
 }
-.filemanager-breadcrumb {
-    position: absolute;
-    left: 4px;
-    top: 4px;
-}
 .filemanager-trash {
     position: absolute;
-    right: 0;
-    bottom: 0;
+    right: 1em;
+    bottom: 1.6em;
     width: var(--icon-size);
     height: var(--icon-size);
     background-repeat: no-repeat;
     background-size: contain;
     background-image: url("resources/trash.svg");
+    cursor: pointer;
+    z-index: 1;
 }
+
 .filemanager-view {
     position: relative;
     overflow-y: scroll;
-
+    height: 100%;
     display: flex;
     flex-wrap: wrap;
-    align-items: flex-start;
-    height: 100%;
+    align-content: flex-start;
     box-sizing: border-box;
     gap: var(--spacing);
     padding: 2em;
 
     &.dragover {
-        border:1px solid green;
+        background: var(--dragover);
     }
 
     > * {
@@ -65,7 +70,6 @@
             background-repeat: no-repeat;
             background-size: contain;
             background-image: url("resources/file.svg");
-
         }
         > .name {
             display: block;

@@ -3,7 +3,6 @@ class FileManager {
     #view;
     #info;
     #trash;
-    #breadcrumb;
 
     constructor(elt, cgi, config) {
         const self = this;
@@ -31,15 +30,19 @@ class FileManager {
         trash.classList.add("hidden");
         this.elt.appendChild(trash);
 
-        const breadcrumb = document.createElement("div");
-        breadcrumb.classList.add("filemanager-breadcrumb");
-        this.elt.appendChild(breadcrumb);
-
         view.addEventListener("dragenter", (e) => {
-            view.classList.add("dragover");
+            if (self.#trash.classList.contains("hidden")) {
+                view.classList.add("dragover");
+                e.dataTransfer.dropEffect = "move";
+            }
         });
         view.addEventListener("dragleave", (e) => {
-            view.classList.remove("dragover");
+            if (self.#trash.classList.contains("hidden")) {
+                if (document.elementsFromPoint(e.clientX, e.clientY).includes(view)) {
+                    return; // Related target shold work but doesn't on Safari; this works everywhere
+                }
+                view.classList.remove("dragover");
+            }
         });
         view.addEventListener("dragover", (e) => {
             e.preventDefault();
@@ -79,7 +82,6 @@ class FileManager {
         this.#view = view;
         this.#info = info;
         this.#trash = trash;
-        this.#breadcrumb = breadcrumb;
     }
 
     /**
@@ -147,7 +149,7 @@ class FileManager {
                         });
                     }
                 } else {
-                    self.log("");
+                    self.log(viewpath, "breadcrumb");
                     if (callback) {
                         callback();
                     }
@@ -347,7 +349,7 @@ class FileManager {
                     }
                 }
                 const path = view.getAttribute("data-path");    // Always ends with slash
-                self.#breadcrumb.innerHTML = path;
+                self.log(path, "breadcrumb");
                 if (path != oldpath) {
                     while (view.firstChild) {
                         view.firstChild.remove();
